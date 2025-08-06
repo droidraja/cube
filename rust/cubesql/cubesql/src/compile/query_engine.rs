@@ -49,6 +49,9 @@ use datafusion::{
     sql::{parser::Statement as DFStatement, planner::SqlToRel},
     variable::VarType,
 };
+use datafusion::logical_plan::{col, Expr, LogicalPlanBuilder};
+use sqlparser::ast::{Expr as SqlExpr, Function, Ident, SelectItem, SetExpr, Statement};
+use std::collections::HashSet;
 
 #[async_trait::async_trait]
 pub trait QueryEngine {
@@ -362,6 +365,29 @@ impl SqlQueryEngine {
     pub fn new(session_manager: Arc<SessionManager>) -> Self {
         Self { session_manager }
     }
+
+    fn inject_aliases(stmt: &mut Statement) {
+        if let Statement::Query(query) = stmt {
+            if let SetExpr::Select(select) = &mut query.body {
+                let new_projection = select
+                    .projection
+                    .iter()
+                    .map(|item| {
+                        if let SelectItem::UnnamedExpr(expr @ SqlExpr::Function(Function { name, .. })) = item {
+                            let alias = name.0.get(0).unwrap().value.clone();
+                            SelectItem::ExprWithAlias {
+                                expr: expr.clone(),
+                                alias: Ident::new(alias.to_lowercase()),
+                            }
+                        } else {
+                            item.clone()
+                        }
+                    })
+                    .collect();
+                select.projection = new_projection;
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -550,9 +576,12 @@ impl QueryEngine for SqlQueryEngine {
         cube_ctx: &CubeContext,
         stmt: &Self::AstStatementType,
     ) -> Result<(LogicalPlan, Self::PlanMetadataType), DataFusionError> {
+        let mut aliased_stmt = stmt.clone();
+        Self::inject_aliases(&mut aliased_stmt);
+
         let df_query_planner = SqlToRel::new_with_options(cube_ctx, true);
         let plan =
-            df_query_planner.statement_to_plan(DFStatement::Statement(Box::new(stmt.clone())))?;
+            df_query_planner.statement_to_plan(DFStatement::Statement(Box::new(aliased_stmt)))?;
 
         Ok((plan, ()))
     }

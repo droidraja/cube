@@ -1156,6 +1156,48 @@ impl PostgresIntegrationTestSuite {
             panic!("Must be CommandComplete command, {}", expected_value)
         }
     }
+
+    async fn test_current_database_column_name(&self) -> RunResult<()> {
+        self.test_execute_query("SELECT current_database()".to_string(), |rows| {
+            assert_eq!(rows.len(), 1);
+            let columns = rows.first().unwrap().columns();
+            assert_eq!(columns.len(), 1);
+            assert_eq!(columns[0].name(), "current_database");
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    async fn test_current_database_aliased_column_name(&self) -> RunResult<()> {
+        self.test_execute_query(
+            "SELECT current_database() as \"current_database()\"".to_string(),
+            |rows| {
+                assert_eq!(rows.len(), 1);
+                let columns = rows.first().unwrap().columns();
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].name(), "current_database()");
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn test_nested_function_column_name(&self) -> RunResult<()> {
+        self.test_execute_query(
+            "SELECT EXTRACT(YEAR FROM current_date())".to_string(),
+            |rows| {
+                assert_eq!(rows.len(), 1);
+                let columns = rows.first().unwrap().columns();
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].name(), "extract");
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -1192,6 +1234,9 @@ impl AsyncTestSuite for PostgresIntegrationTestSuite {
         self.test_simple_query_discard_all().await?;
         self.test_database_change().await?;
         self.test_temp_tables().await?;
+        self.test_current_database_column_name().await?;
+        self.test_current_database_aliased_column_name().await?;
+        self.test_nested_function_column_name().await?;
 
         // PostgreSQL doesn't support unsigned integers in the protocol, it's a constraint only
         self.test_snapshot_execute_query(
